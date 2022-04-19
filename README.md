@@ -35,6 +35,8 @@
 
     -t, --threads:     total number of threads to use
 
+    -a, --thread_affinity   set thread affinity, e.g. 3,4
+
     -s, --script:      LuaJIT script, see SCRIPTING
 
     -H, --header:      HTTP header to add to request, e.g. "User-Agent: wrk"
@@ -83,3 +85,4 @@
   Software Unrestricted (TSU) exception (see the BIS Export
   Administration Regulations, Section 740.13) for both object code and
   source code.
+

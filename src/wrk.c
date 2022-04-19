@@ -8,6 +8,7 @@ static struct config {
     uint64_t connections;
     uint64_t duration;
     uint64_t threads;
+    char    *thread_affinity;
     uint64_t timeout;
     uint64_t pipeline;
     bool     delay;
@@ -42,20 +43,21 @@ static void handler(int sig) {
 }
 
 static void usage() {
-    printf("Usage: wrk <options> <url>                            \n"
-           "  Options:                                            \n"
-           "    -c, --connections <N>  Connections to keep open   \n"
-           "    -d, --duration    <T>  Duration of test           \n"
-           "    -t, --threads     <N>  Number of threads to use   \n"
-           "                                                      \n"
-           "    -s, --script      <S>  Load Lua script file       \n"
-           "    -H, --header      <H>  Add header to request      \n"
-           "        --latency          Print latency statistics   \n"
-           "        --timeout     <T>  Socket/request timeout     \n"
-           "    -v, --version          Print version details      \n"
-           "                                                      \n"
-           "  Numeric arguments may include a SI unit (1k, 1M, 1G)\n"
-           "  Time arguments may include a time unit (2s, 2m, 2h)\n");
+    printf("Usage: wrk <options> <url>                                  \n"
+           "  Options:                                                  \n"
+           "    -c, --connections       <N>  Connections to keep open   \n"
+           "    -d, --duration          <T>  Duration of test           \n"
+           "    -t, --threads           <N>  Number of threads to use   \n"
+           "    -a, --thread_affinity   <S>  Set thread affinity        \n"
+           "                                                            \n"
+           "    -s, --script            <S>  Load Lua script file       \n"
+           "    -H, --header            <H>  Add header to request      \n"
+           "        --latency                Print latency statistics   \n"
+           "        --timeout           <T>  Socket/request timeout     \n"
+           "    -v, --version                Print version details      \n"
+           "                                                            \n"
+           "  Numeric arguments may include a SI unit (1k, 1M, 1G)      \n"
+           "  Time arguments may include a time unit (2s, 2m, 2h)       \n");
 }
 
 int main(int argc, char **argv) {
@@ -200,6 +202,47 @@ int main(int argc, char **argv) {
 }
 
 void *thread_main(void *arg) {
+    // set thread affinity
+    int i, cpus;
+    cpus = sysconf(_SC_NPROCESSORS_CONF);
+    // thread affinity
+    cpu_set_t mask;
+    cpu_set_t get;
+    CPU_ZERO(&mask);
+    if (cfg.thread_affinity != NULL) {
+        char *str = strtok(cfg.thread_affinity, ",");
+        if (str != NULL) {
+            do {
+                i = atoi(str);
+                if (i >= cpus) {
+                    fprintf(stderr, "illegal thread affinity, cpu%d not found\n", i);
+                    ERR_print_errors_fp(stderr);
+                    exit(1);
+                }
+                CPU_SET(i, &mask);
+                str = strtok(NULL, ",");
+            } while (str != NULL);
+        }
+    } else {
+        for (i = 0; i < cpus; ++i) {
+            CPU_SET(i, &mask);
+        }
+    }
+
+    if (pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask) < 0) {
+        fprintf(stderr, "set thread affinity failed\n");
+    }
+    
+    CPU_ZERO(&get);
+    if (pthread_getaffinity_np(pthread_self(), sizeof(get), &get) < 0) {
+        fprintf(stderr, "get thread affinity failed\n");
+    }   
+    for (i = 0; i < cpus; i++) {
+        if (CPU_ISSET(i, &get)) {
+            printf("this thread %lx is running in processor %d\n", (long)pthread_self(), i); 
+        }   
+    }   
+    
     thread *thread = arg;
 
     char *request = NULL;
@@ -467,16 +510,17 @@ static char *copy_url_part(char *url, struct http_parser_url *parts, enum http_p
 }
 
 static struct option longopts[] = {
-    { "connections", required_argument, NULL, 'c' },
-    { "duration",    required_argument, NULL, 'd' },
-    { "threads",     required_argument, NULL, 't' },
-    { "script",      required_argument, NULL, 's' },
-    { "header",      required_argument, NULL, 'H' },
-    { "latency",     no_argument,       NULL, 'L' },
-    { "timeout",     required_argument, NULL, 'T' },
-    { "help",        no_argument,       NULL, 'h' },
-    { "version",     no_argument,       NULL, 'v' },
-    { NULL,          0,                 NULL,  0  }
+    { "connections",         required_argument,  NULL, 'c' },
+    { "duration",            required_argument,  NULL, 'd' },
+    { "threads",             required_argument,  NULL, 't' },
+    { "thread_affinity",     required_argument,  NULL, 'a' },
+    { "script",              required_argument,  NULL, 's' },
+    { "header",              required_argument,  NULL, 'H' },
+    { "latency",             no_argument,        NULL, 'L' },
+    { "timeout",             required_argument,  NULL, 'T' },
+    { "help",                no_argument,        NULL, 'h' },
+    { "version",             no_argument,        NULL, 'v' },
+    { NULL,                  0,                  NULL,  0  }
 };
 
 static int parse_args(struct config *cfg, char **url, struct http_parser_url *parts, char **headers, int argc, char **argv) {
@@ -484,15 +528,19 @@ static int parse_args(struct config *cfg, char **url, struct http_parser_url *pa
     int c;
 
     memset(cfg, 0, sizeof(struct config));
-    cfg->threads     = 2;
-    cfg->connections = 10;
-    cfg->duration    = 10;
-    cfg->timeout     = SOCKET_TIMEOUT_MS;
+    cfg->threads         = 2;
+    cfg->thread_affinity = NULL;
+    cfg->connections     = 10;
+    cfg->duration        = 10;
+    cfg->timeout         = SOCKET_TIMEOUT_MS;
 
-    while ((c = getopt_long(argc, argv, "t:c:d:s:H:T:Lrv?", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "t:a:c:d:s:H:T:Lrv?", longopts, NULL)) != -1) {
         switch (c) {
             case 't':
                 if (scan_metric(optarg, &cfg->threads)) return -1;
+                break;
+            case 'a':
+                cfg->thread_affinity = optarg;
                 break;
             case 'c':
                 if (scan_metric(optarg, &cfg->connections)) return -1;

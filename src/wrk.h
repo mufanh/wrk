@@ -1,6 +1,12 @@
 #ifndef WRK_H
 #define WRK_H
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sched.h>
+
 #include "config.h"
 #include <pthread.h>
 #include <inttypes.h>
