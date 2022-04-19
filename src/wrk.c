@@ -210,7 +210,11 @@ void *thread_main(void *arg) {
     cpu_set_t get;
     CPU_ZERO(&mask);
     if (cfg.thread_affinity != NULL) {
-        char *str = strtok(cfg.thread_affinity, ",");
+        // deep clone
+        char dest[256];
+        memset(dest, '\0', sizeof(dest));
+        strcpy(dest, cfg.thread_affinity);
+        char *str = strtok(dest, ",");
         if (str != NULL) {
             do {
                 i = atoi(str);
